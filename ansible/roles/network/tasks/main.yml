@@ -1,0 +1,122 @@
+---
+- name: stop ufw
+  ansible.builtin.service:
+    name: ufw
+    state: stopped
+    enabled: false
+
+- name: update cache
+  apt:
+    update_cache=yes cache_valid_time=3600
+
+- name: install traceroute
+  ansible.builtin.apt:
+    pkg:
+    - traceroute
+
+- name: install pack inetRouters
+  ansible.builtin.apt:
+    pkg:
+    - iptables-persistent
+    - knockd
+  when: (ansible_hostname == "inetRouter") or (ansible_hostname == "inetRouter2")
+
+- name: install pack centralRouter
+  ansible.builtin.apt:
+    pkg:
+    - knockd
+  when: (ansible_hostname == "centralRouter")
+
+- name: enabled knockd
+  replace:
+    path: "/etc/default/knockd"
+    regexp: '^START_KNOCKD=0'
+    replace: 'START_KNOCKD=1'
+  when: (ansible_hostname == "inetRouter")
+
+- name: copy knockd systemd unit
+  template:
+    src: knockd.service
+    dest: /etc/systemd/system/knockd.service
+  when: (ansible_hostname == "inetRouter")
+
+- name: copy knockd systemd unit
+  template:
+    src: knock_conf
+    dest: /etc/knockd.conf
+  when: (ansible_hostname == "inetRouter")
+
+- name: start knockd
+  ansible.builtin.service:
+    name: knockd.service
+    state: started
+    enabled: true
+  when: (ansible_hostname == "inetRouter")
+
+- name: enable iptables-persistent
+  ansible.builtin.service:
+    name: iptables.service
+    enabled: true
+  when: (ansible_hostname == "inetRouter") or (ansible_hostname == "inetRouter2")
+
+- name: Set up NAT on inetRouter
+  template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  with_items:
+    - { src: "iptables_rules.ipv4", dest: "/etc/iptables_rules.ipv4", mode: "0640" }
+  when: (ansible_hostname == "inetRouter")
+
+- name: Set up NAT on inetRouter2
+  template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dest }}"
+    owner: root
+    group: root
+    mode: "{{ item.mode }}"
+  with_items:
+    - { src: "iptables_rules.ipv4_2", dest: "/etc/iptables_rules.ipv4", mode: "0640" }
+  when: (ansible_hostname == "inetRouter2")
+
+
+- name: apply iptables rules
+  ansible.builtin.shell: /sbin/iptables-restore < /etc/iptables_rules.ipv4
+  when: (ansible_hostname == "inetRouter") or (ansible_hostname == "inetRouter2")
+
+- name: safe iptables rules
+  ansible.builtin.shell: netfilter-persistent save
+  when: (ansible_hostname == "inetRouter") or (ansible_hostname == "inetRouter2")
+
+- name: set up forward packages across routers
+  sysctl:
+    name: net.ipv4.conf.all.forwarding
+    value: '1'
+    state: present
+  when: "'routers' in group_names"
+
+- name: disable default route
+  template:
+    src: 50-cloud-init.yaml
+    dest: /etc/netplan/00-installer-config.yaml
+    owner: root
+    group: root
+    mode: 0600
+  when: (ansible_hostname != "inetRouter") or (ansible_hostname != "inetRouter2")
+
+- name: netplan try
+  ansible.builtin.shell: netplan try
+
+- name: add default gateway
+  template:
+    src: "50-vagrant_{{ansible_hostname}}.yaml"
+    dest: /etc/netplan/50-vagrant.yaml
+    owner: root
+    group: root
+    mode: 0600
+
+- name: restart all hosts
+  reboot:
+    reboot_timeout: 600

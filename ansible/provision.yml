@@ -1,0 +1,20 @@
+---
+- hosts: centralServer
+  become: true
+  gather_facts: true
+
+  roles:
+    - nginx
+
+
+- hosts: all
+  become: true
+  gather_facts: true
+
+  roles:
+    - network
+
+
+
+
+
